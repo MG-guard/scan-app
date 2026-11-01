@@ -4,21 +4,25 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>条形码扫码与导出</title>
-<!-- 引入支持条形码的 ZXing 库 -->
-<script src="https://unpkg.com/@zxing/library@0.19.2/umd/index.min.js"></script>
+<!-- 引入支持条形码的ZXing库 -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/dist/zxing.min.js"></script>
 <style>
-  body { font-family: sans-serif; margin: 0; padding: 10px; background: #f5f5f5; }
-  .container { max-width: 600px; margin: 0 auto; text-align: center; }
-  #cameraBox { width: 100%; height: 300px; background: #000; margin: 10px 0; position: relative; overflow: hidden; }
+  body { font-family: sans-serif; background: #f4f6f8; margin: 0; padding: 10px; }
+  .container { max-width: 500px; margin: auto; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+  h2 { text-align: center; margin-top: 0; }
+  #cameraBox { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; overflow: hidden; border-radius: 5px; margin-bottom: 10px; }
   video { width: 100%; height: 100%; object-fit: cover; }
-  .line { position: absolute; top: 50%; left: 10%; right: 10%; height: 2px; background: red; animation: scan 2s infinite; }
-  @keyframes scan { 0% {top:20%} 50% {top:80%} 100% {top:20%} }
-  button { padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; background: #007bff; color: #fff; font-size: 16px; cursor: pointer; }
+  /* 识别辅助线 */
+  .line { position: absolute; top: 50%; left: 10%; right: 10%; height: 2px; background: red; transform: translateY(-50%); z-index: 10; }
+  .hint { position: absolute; bottom: 10px; width: 100%; text-align: center; color: #fff; font-size: 12px; text-shadow: 1px 1px 2px #000; }
+  button { display: block; width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 5px; background: #007bff; color: #fff; font-size: 16px; cursor: pointer; }
   button:active { background: #0056b3; }
   .btn-export { background: #28a745; }
-  .record-box { background: #fff; padding: 10px; margin-top: 10px; border-radius: 5px; text-align: left; max-height: 300px; overflow-y: auto; }
-  .item { border-bottom: 1px solid #eee; padding: 8px 0; font-size: 14px; }
+  .btn-export:active { background: #1e7e34; }
+  #msg { text-align: center; margin: 10px 0; font-size: 14px; }
   .success { color: green; font-weight: bold; }
+  .record-box { background: #fafafa; padding: 10px; margin-top: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; border: 1px solid #eee; }
+  .item { border-bottom: 1px solid #eee; padding: 6px 0; font-size: 14px; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -27,15 +31,16 @@
   <div id="cameraBox">
     <video id="video" playsinline></video>
     <div class="line"></div>
+    <div class="hint">请让条形码横向对准红线</div>
   </div>
-  <button id="btnScan">▶ 开启/扫描</button>
-  <button id="btnExport" class="btn-export">📊 导出CSV</button>
-  <div id="msg"></div>
-  <div class="record-box" id="records"><b>扫码记录：</b></div>
+  <button id="btnScan">▶ 开启 / 停止扫描</button>
+  <button id="btnExport" class="btn-export">📊 随时导出 CSV</button>
+  <div id="msg">等待操作...</div>
+  <div class="record-box" id="records"><b>扫码记录 (0)：</b></div>
 </div>
 
 <script>
-let codeReader = new ZXing.BrowserMultiFormatReader();
+let codeReader;
 let isScanning = false;
 let stream = null;
 const records = [];
@@ -43,59 +48,81 @@ const video = document.getElementById('video');
 const msg = document.getElementById('msg');
 const recordsDiv = document.getElementById('records');
 
+// 初始化ZXing，开启TRY_HARDER提升条形码识别率
+const hints = new Map();
+hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
 document.getElementById('btnScan').onclick = async () => {
-  if (isScanning) return stopScan();
+  if (isScanning) {
+    stopScan();
+    return;
+  }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", focusMode: "continuous" }, audio: false });
     video.srcObject = stream;
     video.play();
     isScanning = true;
-    msg.innerHTML = "扫描中...请将条形码对准红线";
+    msg.innerHTML = "扫描中...请横向对准条码";
+    
     codeReader.decodeFromVideoDevice(null, video, (result, err) => {
       if (result) {
         const text = result.text;
         const format = result.format || "条形码";
-        // 防抖：避免同一码连续记录
+        // 防抖：避免同一码连续刷屏
         if (records.length === 0 || records[records.length-1].content !== text) {
           const time = new Date().toLocaleString();
           records.push({ idx: records.length+1, time, content: text, type: format });
           updateRecords();
-          msg.innerHTML = `<span class="success">识别成功: ${text}</span>`;
-          // 震动反馈（手机支持则触发）
+          msg.innerHTML = `<span class="success">识别: ${text}</span>`;
           if(navigator.vibrate) navigator.vibrate(50);
         }
       }
     });
   } catch (e) {
     msg.innerHTML = "相机开启失败，请检查权限";
+    isScanning = false;
   }
 };
 
 function stopScan() {
   isScanning = false;
   if (stream) stream.getTracks().forEach(t => t.stop());
-  codeReader.reset();
-  msg.innerHTML = "已停止";
+  if(codeReader) codeReader.reset();
+  video.srcObject = null;
+  msg.innerHTML = "已停止扫描";
 }
 
 function updateRecords() {
-  recordsDiv.innerHTML = "<b>扫码记录：</b>" + records.map(r => 
-    `<div class="item">[${r.idx}] ${r.time}<br>内容: <b>${r.content}</b> (${r.type})</div>`
+  recordsDiv.innerHTML = `<b>扫码记录 (${records.length})：</b>` + records.map(r => 
+    `<div class="item">[${r.idx}] ${r.time}<br><b>${r.content}</b> (${r.type})</div>`
   ).join('');
 }
 
+// 核心修改：导出按钮完全独立，无数量限制，随时可点
 document.getElementById('btnExport').onclick = () => {
-  if (records.length === 0) return alert("无数据");
-  const BOM = '\uFEFF';
-  const csv = BOM + "序号,时间,内容,类型\n" + records.map(r => 
+  if (records.length === 0) {
+    msg.innerHTML = "当前无记录，可先扫码再导出（支持空记录导出）";
+    // 即使无记录也导出一个表头文件，确保“随时导出”
+    const csv = '\uFEFF序号,时间,内容,类型\n';
+    downloadCSV(csv, '空记录');
+    return;
+  }
+  const csv = '\uFEFF序号,时间,内容,类型\n' + records.map(r => 
     `${r.idx},"${r.time}","${r.content.replace(/"/g,'""')}",${r.type}`
   ).join("\n");
+  downloadCSV(csv, `记录${records.length}条`);
+};
+
+function downloadCSV(csv, nameTag) {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `扫码记录_${new Date().toISOString().slice(0,10)}.csv`;
+  a.download = `扫码数据_${nameTag}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
   a.click();
-};
+  document.body.removeChild(a);
+}
 </script>
 </body>
 </html>
