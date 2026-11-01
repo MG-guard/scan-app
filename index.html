@@ -2,77 +2,60 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>条形码扫码与导出</title>
-<!-- 引入支持条形码的ZXing库 -->
-<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/dist/zxing.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.2"></script>
 <style>
-  body { font-family: sans-serif; background: #f4f6f8; margin: 0; padding: 10px; }
-  .container { max-width: 500px; margin: auto; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-  h2 { text-align: center; margin-top: 0; }
-  #cameraBox { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; overflow: hidden; border-radius: 5px; margin-bottom: 10px; }
-  video { width: 100%; height: 100%; object-fit: cover; }
-  /* 识别辅助线 */
-  .line { position: absolute; top: 50%; left: 10%; right: 10%; height: 2px; background: red; transform: translateY(-50%); z-index: 10; }
-  .hint { position: absolute; bottom: 10px; width: 100%; text-align: center; color: #fff; font-size: 12px; text-shadow: 1px 1px 2px #000; }
-  button { display: block; width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 5px; background: #007bff; color: #fff; font-size: 16px; cursor: pointer; }
-  button:active { background: #0056b3; }
-  .btn-export { background: #28a745; }
-  .btn-export:active { background: #1e7e34; }
-  #msg { text-align: center; margin: 10px 0; font-size: 14px; }
-  .success { color: green; font-weight: bold; }
-  .record-box { background: #fafafa; padding: 10px; margin-top: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; border: 1px solid #eee; }
-  .item { border-bottom: 1px solid #eee; padding: 6px 0; font-size: 14px; word-break: break-all; }
+  body { font-family: sans-serif; text-align: center; padding: 10px; background: #f5f5f5; margin: 0; }
+  h1 { font-size: 24px; margin: 10px 0; }
+  #videoWrap { position: relative; width: 100%; max-width: 500px; margin: 0 auto; background: #000; border-radius: 8px; overflow: hidden; }
+  video { width: 100%; display: block; }
+  .red-line { position: absolute; top: 50%; left: 5%; right: 5%; height: 2px; background: red; z-index: 10; }
+  .tip { color: #fff; padding: 10px; font-size: 14px; }
+  button { width: 100%; max-width: 500px; padding: 15px; margin: 10px auto; border: none; border-radius: 8px; font-size: 18px; cursor: pointer; display: block; }
+  .btn-scan { background: #007aff; color: #fff; }
+  .btn-export { background: #34c759; color: #fff; }
+  #msg { margin: 10px; font-size: 16px; }
+  .success { color: green; }
+  .error { color: red; }
+  #records { text-align: left; max-width: 500px; margin: 20px auto; background: #fff; padding: 10px; border-radius: 8px; }
+  .item { border-bottom: 1px solid #eee; padding: 8px 0; word-break: break-all; }
 </style>
 </head>
 <body>
-<div class="container">
-  <h2>条形码扫码器</h2>
-  <div id="cameraBox">
-    <video id="video" playsinline></video>
-    <div class="line"></div>
-    <div class="hint">请让条形码横向对准红线</div>
-  </div>
-  <button id="btnScan">▶ 开启 / 停止扫描</button>
-  <button id="btnExport" class="btn-export">📊 随时导出 CSV</button>
-  <div id="msg">等待操作...</div>
-  <div class="record-box" id="records"><b>扫码记录 (0)：</b></div>
+<h1>条形码扫码器</h1>
+<div id="videoWrap">
+  <video id="video" playsinline></video>
+  <div class="red-line"></div>
+  <div class="tip">请让条形码横向对准红线</div>
 </div>
+<button class="btn-scan" id="btnScan">▶ 开启 / 停止扫描</button>
+<button class="btn-export" id="btnExport">📊 随时导出表格(Excel可用)</button>
+<div id="msg">等待操作...</div>
+<div id="records"><b>扫码记录 (0)：</b></div>
 
 <script>
-let codeReader;
-let isScanning = false;
-let stream = null;
-const records = [];
-const video = document.getElementById('video');
-const msg = document.getElementById('msg');
-const recordsDiv = document.getElementById('records');
+let isScanning = false, stream, codeReader, records = [];
+try { codeReader = new ZXing.BrowserMultiFormatReader(); } catch(e) {}
 
-// 初始化ZXing，开启TRY_HARDER提升条形码识别率
-const hints = new Map();
-hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-codeReader = new ZXing.BrowserMultiFormatReader(hints);
+const video = document.getElementById('video'), msg = document.getElementById('msg'), recordsDiv = document.getElementById('records');
 
 document.getElementById('btnScan').onclick = async () => {
-  if (isScanning) {
-    stopScan();
-    return;
-  }
+  if (isScanning) { stopScan(); return; }
   try {
+    msg.innerHTML = "请求相机权限中...";
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", focusMode: "continuous" }, audio: false });
     video.srcObject = stream;
     video.play();
     isScanning = true;
     msg.innerHTML = "扫描中...请横向对准条码";
-    
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     codeReader.decodeFromVideoDevice(null, video, (result, err) => {
       if (result) {
-        const text = result.text;
-        const format = result.format || "条形码";
-        // 防抖：避免同一码连续刷屏
+        const text = result.text, format = result.format || "条形码";
         if (records.length === 0 || records[records.length-1].content !== text) {
-          const time = new Date().toLocaleString();
-          records.push({ idx: records.length+1, time, content: text, type: format });
+          records.push({ idx: records.length+1, time: new Date().toLocaleString(), content: text, type: format });
           updateRecords();
           msg.innerHTML = `<span class="success">识别: ${text}</span>`;
           if(navigator.vibrate) navigator.vibrate(50);
@@ -80,7 +63,7 @@ document.getElementById('btnScan').onclick = async () => {
       }
     });
   } catch (e) {
-    msg.innerHTML = "相机开启失败，请检查权限";
+    msg.innerHTML = `<span class="error">相机开启失败：${e.message}。请检查权限并用Safari/Chrome</span>`;
     isScanning = false;
   }
 };
@@ -99,30 +82,19 @@ function updateRecords() {
   ).join('');
 }
 
-// 核心修改：导出按钮完全独立，无数量限制，随时可点
+// 导出CSV（用Excel/WPS打开即为标准表格，随时可点）
 document.getElementById('btnExport').onclick = () => {
-  if (records.length === 0) {
-    msg.innerHTML = "当前无记录，可先扫码再导出（支持空记录导出）";
-    // 即使无记录也导出一个表头文件，确保“随时导出”
-    const csv = '\uFEFF序号,时间,内容,类型\n';
-    downloadCSV(csv, '空记录');
-    return;
+  let csv = '\uFEFF序号,时间,内容,类型\n';
+  if (records.length > 0) {
+    csv += records.map(r => `${r.idx},"${r.time}","${r.content.replace(/"/g,'""')}",${r.type}`).join("\n");
   }
-  const csv = '\uFEFF序号,时间,内容,类型\n' + records.map(r => 
-    `${r.idx},"${r.time}","${r.content.replace(/"/g,'""')}",${r.type}`
-  ).join("\n");
-  downloadCSV(csv, `记录${records.length}条`);
-};
-
-function downloadCSV(csv, nameTag) {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `扫码数据_${nameTag}_${new Date().toISOString().slice(0,10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
+  a.download = `扫码表格_${records.length}条_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  msg.innerHTML = records.length === 0 ? "无记录，已导出空表格(表头)" : `已导出${records.length}条(Excel可打开)`;
+};
 </script>
 </body>
 </html>
