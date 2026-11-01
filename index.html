@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>扫码记录</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; padding-bottom: 90px; }
+
+.header { background: linear-gradient(135deg, #4CAF50, #2E7D32); color: white; padding: 14px; text-align: center; position: sticky; top: 0; z-index: 100; }
+.header h1 { font-size: 18px; margin-bottom: 6px; }
+.stats { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; font-size: 12px; }
+.stats span { background: rgba(255,255,255,0.25); padding: 3px 8px; border-radius: 10px; }
+
+.scan-area { margin: 12px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+#scanner { width: 100%; height: 280px; background: #000; display: none; }
+#scanner.active { display: block; }
+.scan-btn { width: 100%; padding: 16px; font-size: 17px; font-weight: bold; background: #4CAF50; color: white; border: none; cursor: pointer; }
+
+.manual { margin: 12px; background: white; border-radius: 12px; padding: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+.manual input { width: 100%; padding: 12px; font-size: 16px; border: 1.5px solid #ddd; border-radius: 8px; outline: none; }
+
+.records { margin: 12px; }
+.batch-card { background: white; border-radius: 12px; margin-bottom: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); overflow: hidden; }
+.batch-header { padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
+.batch-header.active-batch { background: #E8F5E9; border-left: 4px solid #4CAF50; }
+.batch-header.sealed-batch { background: #F5F5F5; border-left: 4px solid #9E9E9E; }
+.batch-title { font-weight: bold; font-size: 14px; }
+.batch-info { font-size: 11px; color: #666; margin-top: 2px; }
+.batch-actions { display: flex; gap: 6px; }
+.batch-actions button { padding: 5px 10px; font-size: 11px; border: none; border-radius: 6px; cursor: pointer; }
+.btn-export { background: #2196F3; color: white; }
+
+.record-list { max-height: 0; overflow: hidden; transition: max-height 0.3s; }
+.record-list.expanded { max-height: 400px; overflow-y: auto; }
+.record-item { padding: 8px 14px; border-top: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+.record-item .idx { color: #999; font-size: 11px; min-width: 36px; }
+.record-item .content { flex: 1; margin: 0 6px; font-size: 13px; word-break: break-all; }
+.record-item .time { color: #666; font-size: 10px; min-width: 72px; text-align: right; }
+.record-item .del { color: #F44336; background: none; border: none; font-size: 16px; cursor: pointer; }
+
+.export-bar { position: fixed; bottom: 0; left: 0; right: 0; background: white; border-top: 1px solid #ddd; padding: 10px; display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.export-bar button { padding: 10px 14px; font-size: 13px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+.btn-exp-all { background: #4CAF50; color: white; }
+.btn-exp-current { background: #2196F3; color: white; }
+.btn-share { background: #07C160; color: white; }
+.btn-clear { background: #F44336; color: white; }
+
+.progress-bar { height: 4px; background: #E0E0E0; margin: 6px 12px 0; border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: #4CAF50; transition: width 0.3s; }
+
+.toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 8px; font-size: 13px; z-index: 999; display: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📷 扫码记录</h1>
+  <div class="stats">
+    <span id="statTotal">累计: 0条</span>
+    <span id="statToday">今日: 0条</span>
+    <span id="statCurrent">当前表: 第1表</span>
+    <span id="statLeft">距满表: 5000条</span>
+  </div>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+</div>
+
+<div class="scan-area">
+  <div id="scanner"></div>
+  <button class="scan-btn" id="scanBtn" onclick="toggleScan()">▶ 开始扫描</button>
+</div>
+
+<div class="manual">
+  <input type="text" id="manualInput" placeholder="手动输入内容，回车添加" onkeydown="if(event.key==='Enter')addManual()">
+</div>
+
+<div class="records" id="recordsArea"></div>
+
+<div class="export-bar">
+  <button class="btn-exp-all" onclick="exportAll()">📊 导出全部</button>
+  <button class="btn-exp-current" onclick="exportCurrent()">📋 导出当前表</button>
+  <button class="btn-share" id="shareBtn" onclick="shareFile()" style="display:none">📤 分享到微信</button>
+  <button class="btn-clear" onclick="clearAll()">🗑 清空</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="batch.js"></script>
+<script src="export.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+let html5QrCode;
+let scanning = false;
+
+function toggleScan() {
+  const scanner = document.getElementById('scanner');
+  const btn = document.getElementById('scanBtn');
+  if (!scanning) {
+    scanner.classList.add('active');
+    btn.textContent = '⏹ 停止扫描';
+    html5QrCode = new Html5Qrcode("scanner");
+    html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 },
+      (code) => { addRecord(code, 'qrcode'); },
+      () => {}
+    ).catch(err => { showToast('相机启动失败'); stopScan(); });
+    scanning = true;
+  } else { stopScan(); }
+}
+
+function stopScan() {
+  if (html5QrCode) { html5QrCode.stop().then(() => html5QrCode.clear()).catch(()=>{}); }
+  document.getElementById('scanner').classList.remove('active');
+  document.getElementById('scanBtn').textContent = '▶ 开始扫描';
+  scanning = false;
+}
+
+function addManual() {
+  const input = document.getElementById('manualInput');
+  if (input.value.trim()) {
+    addRecord(input.value.trim(), 'manual');
+    input.value = '';
+  }
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 2000);
+}
+
+function shareFile() {
+  if (!navigator.share) { showToast('浏览器不支持分享'); return; }
+  exportAllBlob().then(blob => {
+    const fname = generateExportName('全部表格') + '.csv';
+    const file = new File([blob], fname, { type: 'text/csv' });
+    navigator.share({ title: '扫码记录', files: [file] }).catch(()=>showToast('已取消'));
+  });
+}
+
+window.addEventListener('load', () => {
+  if (navigator.share && navigator.canShare) {
+    document.getElementById('shareBtn').style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>
