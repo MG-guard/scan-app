@@ -1,104 +1,137 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>条形码扫码与导出</title>
-<script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no" />
+<title>条码扫码（精确 Code128）</title>
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
-body { font-family: sans-serif; margin: 0; padding: 10px; background: #f5f5f5; }
-.container { max-width: 500px; margin: auto; text-align: center; }
-h2 { margin: 5px 0 10px; }
-#cameraBox { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 8px; overflow: hidden; }
-#interactive { width: 100%; height: 100%; }
-#interactive video, #interactive canvas { width: 100% !important; height: 100% !important; object-fit: cover; }
-#interactive canvas.drawingBuffer { position: absolute; top: 0; left: 0; }
-.scan-region { position: absolute; top: 45%; left: 8%; right: 8%; height: 2px; background: red; z-index: 20; }
-.tip { color: #666; font-size: 12px; margin: 6px 0; }
-button { width: 100%; padding: 14px; margin: 6px 0; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; color: #fff; }
-.btn-scan { background: #007aff; }
-.btn-export { background: #34c759; }
-#msg { margin: 8px 0; font-size: 14px; }
-.success { color: green; font-weight: bold; }
-.error { color: red; }
-#records { background: #fff; padding: 10px; margin-top: 10px; border-radius: 8px; text-align: left; max-height: 220px; overflow-y: auto; font-size: 13px; }
-.item { border-bottom: 1px solid #eee; padding: 6px 0; word-break: break-all; }
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f6f8;margin:0;padding:16px;color:#222}
+.box{max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.08)}
+h2{margin:0 0 10px;font-size:20px;text-align:center}
+.tip{font-size:13px;color:#666;margin-bottom:10px;text-align:center;line-height:1.5}
+#cameraBox{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:12px;overflow:hidden;margin-bottom:10px}
+#interactive{width:100%;height:100%;object-fit:cover}
+.scan-frame{position:absolute;left:10%;right:10%;top:30%;bottom:30%;border:2px solid #00e676;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.35);pointer-events:none}
+button{width:100%;padding:13px;border:none;border-radius:10px;font-size:16px;margin:6px 0;color:#fff}
+.btn-scan{background:#1976d2}
+.btn-export{background:#2e7d32}
+.btn-clear{background:#c62828}
+#msg{padding:10px;font-size:14px;border-radius:8px;background:#eee;margin:8px 0;min-height:20px}
+.success{color:#2e7d32;font-weight:bold}
+.item{border-bottom:1px dashed #ddd;padding:8px 0;word-break:break-all}
+.item b{color:#1976d2;font-size:16px}
 </style>
 </head>
 <body>
-<div class="container">
-  <h2>条形码扫码器</h2>
-  <div id="cameraBox">
-    <div id="interactive"></div>
-    <div class="scan-region"></div>
-  </div>
-  <div class="tip">条码横向放平，让红线条穿过条码黑色竖线</div>
-  <button class="btn-scan" id="btnScan">▶ 开启 / 停止扫描</button>
-  <button class="btn-export" id="btnExport">📊 随时导出 Excel (.xlsx)</button>
-  <div id="msg">等待操作...</div>
-  <div id="records"><b>扫码记录 (0)：</b></div>
+<div class="box">
+<h2>条码扫码（精确 Code128）</h2>
+<div class="tip">只扫中间条码区域<br>扫到一个自动停，结果应为 11 位数字</div>
+
+<div id="cameraBox">
+  <div id="interactive"></div>
+  <div class="scan-frame"></div>
+</div>
+
+<button class="btn-scan" id="btnScan">▶ 开始扫描</button>
+<button class="btn-export" id="btnExport">📊 导出 Excel</button>
+<button class="btn-clear" id="btnClear">🗑 清空记录</button>
+
+<div id="msg">等待操作...</div>
+<div id="records"><b>累计记录 (0)</b></div>
 </div>
 
 <script>
+const STORE_KEY = 'scan_records_v1';
 let scanning = false;
-const records = [];
+let records = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
+let nextIdx = parseInt(localStorage.getItem('scan_next_idx') || '1', 10);
+
 const msg = document.getElementById('msg');
 const recordsDiv = document.getElementById('records');
-let lastCode = '', lastTime = 0;
+const btnScan = document.getElementById('btnScan');
 
-function updateRecords() {
-  recordsDiv.innerHTML = `<b>扫码记录 (${records.length})：</b>` + records.map(r =>
-    `<div class="item">[${r.idx}] ${r.time}<br><b>${r.content}</b> (${r.type})</div>`
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+
+function save(){
+  localStorage.setItem(STORE_KEY, JSON.stringify(records));
+  localStorage.setItem('scan_next_idx', String(nextIdx));
+}
+function render(){
+  recordsDiv.innerHTML = `<b>累计记录 (${records.length})</b>` + records.map(r=>
+    `<div class="item">[${r.idx}] ${esc(r.time)}<br><b>${esc(r.content)}</b> <small>(${esc(r.type)})</small>
+     <button onclick="this.parentElement.remove();records.splice(${records.indexOf(r)},1);save();render()" style="width:auto;padding:2px 8px;margin-left:8px;font-size:12px;background:#999">删</button></div>`
   ).join('');
 }
+render();
 
-function startScan() {
-  msg.textContent = '启动中...';
+function stopScan(){
+  if(scanning){try{Quagga.stop();}catch(e){} scanning=false;}
+  btnScan.textContent='▶ 开始扫描';
+}
+
+btnScan.onclick=()=>{
+  if(scanning){stopScan(); msg.textContent='已手动停止'; return;}
+
+  msg.textContent='启动相机...';
+  btnScan.textContent='⏹ 停止扫描';
+
   Quagga.init({
-    inputStream: { type: 'LiveStream', target: document.querySelector('#interactive'), constraints: { facingMode: 'environment' } },
-    locator: { patchSize: 'medium', halfSample: true },
-    numOfWorkers: 2,
-    decoder: { readers: ['code_128_reader', 'ean_reader', 'ean_8_reader', 'code_39_reader', 'upc_reader', 'upc_e_reader', 'i2of5_reader'] },
-    locate: true
-  }, function(err) {
-    if (err) { msg.innerHTML = '<span class="error">启动失败：' + err + '</span>'; return; }
-    scanning = true;
-    msg.textContent = '扫描中...';
+    inputStream:{
+      type:'LiveStream',
+      target:document.querySelector('#interactive'),
+      constraints:{facingMode:'environment', width:{ideal:1280}, height:{ideal:960}},
+      area:{top:'30%', right:'10%', left:'10%', bottom:'30%'}
+    },
+    locator:{patchSize:'large', halfSample:false},
+    numOfWorkers:2,
+    frequency:10,
+    decoder:{
+      readers:['code_128_reader'],
+      multiple:false,
+      debug:{drawBoundingBox:false}
+    }
+  }, err=>{
+    if(err){msg.innerHTML='<span style="color:red">启动失败：'+esc(err)+'</span>'; btnScan.textContent='▶ 开始扫描'; return;}
     Quagga.start();
+    scanning=true;
+    msg.textContent='扫描中...请把条码对准绿色框';
   });
+};
 
-  Quagga.onDetected(function(result) {
-    const code = result.codeResult.code;
-    const now = Date.now();
-    // 防抖：同一码 1.5 秒内不重复
-    if (code === lastCode && now - lastTime < 1500) return;
-    lastCode = code; lastTime = now;
-    const format = result.codeResult.format || '条形码';
-    records.push({ idx: records.length + 1, time: new Date().toLocaleString(), content: code, type: format });
-    updateRecords();
-    msg.innerHTML = '<span class="success">识别：' + code + '</span>';
-    if (navigator.vibrate) navigator.vibrate(50);
-  });
-}
+Quagga.onDetected(result=>{
+  if(!scanning) return;
+  const code = (result.codeResult.code||'').trim();
+  const format = result.codeResult.format||'Code128';
+  const confidence = result.codeResult.confidence||0;
 
-function stopScan() {
-  if (scanning) { Quagga.stop(); scanning = false; }
-  msg.textContent = '已停止';
-}
+  // 精确条件：必须是11位纯数字（你的标签条码）
+  if(!/^\d{11}$/.test(code)) return;
+  if(confidence < 0.85) return;
 
-document.getElementById('btnScan').onclick = () => scanning ? stopScan() : startScan();
+  records.push({idx:nextIdx++, time:new Date().toLocaleString(), content:code, type:format});
+  save(); render();
+  msg.innerHTML='<span class="success">✅ 已扫：'+esc(code)+'</span>';
+  if(navigator.vibrate) navigator.vibrate([80,40,80]);
+  stopScan();
+});
 
-// 导出真正的 Excel (.xlsx)，随时可点
-document.getElementById('btnExport').onclick = () => {
-  const wsData = [['序号', '扫描时间', '扫描内容', '码类型']];
-  records.forEach(r => wsData.push([r.idx, r.time, r.content, r.type]));
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{ wch: 6 }, { wch: 20 }, { wch: 30 }, { wch: 12 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '扫码记录');
-  XLSX.writeFile(wb, `扫码记录_${records.length}条_${new Date().toISOString().slice(0,10)}.xlsx`);
-  msg.textContent = records.length ? '已导出 ' + records.length + ' 条到 Excel' : '无记录，已导出空表格';
+document.getElementById('btnExport').onclick=()=>{
+  const wsData=[['序号','扫描时间','扫描内容','码类型']];
+  records.forEach(r=>wsData.push([r.idx,r.time,r.content,r.type]));
+  const ws=XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols']=[{wch:6},{wch:20},{wch:18},{wch:12}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'扫码记录');
+  XLSX.writeFile(wb,`扫码记录_${records.length}条_${new Date().toISOString().slice(0,10)}.xlsx`);
+  msg.textContent=records.length?'已导出':'无记录';
+};
+
+document.getElementById('btnClear').onclick=()=>{
+  if(!records.length) return;
+  if(!confirm('确定清空所有记录？此操作不可恢复（可先导出Excel备份）')) return;
+  records=[]; nextIdx=1; save(); render(); msg.textContent='已清空';
 };
 </script>
 </body>
