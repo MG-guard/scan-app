@@ -2,136 +2,129 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no" />
-<title>条码扫码（精确 Code128）</title>
-<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+<title>条码扫码</title>
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f6f8;margin:0;padding:16px;color:#222}
-.box{max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.08)}
-h2{margin:0 0 10px;font-size:20px;text-align:center}
-.tip{font-size:13px;color:#666;margin-bottom:10px;text-align:center;line-height:1.5}
-#cameraBox{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:12px;overflow:hidden;margin-bottom:10px}
-#interactive{width:100%;height:100%;object-fit:cover}
-.scan-frame{position:absolute;left:10%;right:10%;top:30%;bottom:30%;border:2px solid #00e676;border-radius:8px;box-shadow:0 0 0 9999px rgba(0,0,0,.35);pointer-events:none}
-button{width:100%;padding:13px;border:none;border-radius:10px;font-size:16px;margin:6px 0;color:#fff}
-.btn-scan{background:#1976d2}
-.btn-export{background:#2e7d32}
-.btn-clear{background:#c62828}
-#msg{padding:10px;font-size:14px;border-radius:8px;background:#eee;margin:8px 0;min-height:20px}
-.success{color:#2e7d32;font-weight:bold}
-.item{border-bottom:1px dashed #ddd;padding:8px 0;word-break:break-all}
-.item b{color:#1976d2;font-size:16px}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f0f2f5;margin:0;padding:10px;color:#222}
+.box{max-width:500px;margin:auto;background:#fff;border-radius:14px;padding:14px;box-shadow:0 6px 20px rgba(0,0,0,.1)}
+h2{margin:0 0 4px;text-align:center;font-size:18px}
+.tip{text-align:center;color:#666;font-size:12px;margin-bottom:8px}
+#cam{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:12px;overflow:hidden;margin-bottom:8px}
+#cam video{width:100%;height:100%;object-fit:cover}
+#cam canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+.cross{position:absolute;top:50%;left:10%;right:10%;height:2px;background:red;z-index:10;transform:translateY(-50%)}
+.cross::before,.cross::after{content:'';position:absolute;background:red}
+.cross::before{top:-20px;bottom:-20px;left:50%;width:2px;transform:translateX(-50%)}
+.btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:16px;margin:6px 0;color:#fff;cursor:pointer}
+.b1{background:#1976d2}
+.b2{background:#2e7d32}
+.b3{background:#c62828}
+#msg{padding:8px;font-size:14px;border-radius:8px;background:#f5f5f5;margin:8px 0;min-height:20px}
+.ok{color:#2e7d32;font-weight:bold}
+.rec{background:#fff;padding:10px;margin-top:10px;border-radius:10px;max-height:200px;overflow-y:auto;font-size:13px}
+.it{border-bottom:1px solid #eee;padding:6px 0}
 </style>
 </head>
 <body>
 <div class="box">
-<h2>条码扫码（精确 Code128）</h2>
-<div class="tip">只扫中间条码区域<br>扫到一个自动停，结果应为 11 位数字</div>
-
-<div id="cameraBox">
-  <div id="interactive"></div>
-  <div class="scan-frame"></div>
-</div>
-
-<button class="btn-scan" id="btnScan">▶ 开始扫描</button>
-<button class="btn-export" id="btnExport">📊 导出 Excel</button>
-<button class="btn-clear" id="btnClear">🗑 清空记录</button>
-
-<div id="msg">等待操作...</div>
-<div id="records"><b>累计记录 (0)</b></div>
+<h2>条码扫码</h2>
+<div class="tip">条码横向对准红线，扫到自动停</div>
+<div id="cam"><video id="v" playsinline></video><div class="cross"></div></div>
+<button class="btn b1" id="go">▶ 开始扫描</button>
+<button class="btn b2" id="exp">📊 导出 Excel</button>
+<button class="btn b3" id="clr">🗑 清空</button>
+<div id="msg">点击开始扫描</div>
+<div class="rec" id="rec"><b>记录 (0)</b></div>
 </div>
 
 <script>
-const STORE_KEY = 'scan_records_v1';
-let scanning = false;
-let records = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
-let nextIdx = parseInt(localStorage.getItem('scan_next_idx') || '1', 10);
+// 加载 ZXing WASM
+let zxReady=false;
+const script=document.createElement('script');
+script.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js';
+script.onload=()=>{zxReady=true;document.getElementById('msg').textContent='引擎加载完成，可开始扫描'};
+document.head.appendChild(script);
 
-const msg = document.getElementById('msg');
-const recordsDiv = document.getElementById('records');
-const btnScan = document.getElementById('btnScan');
+const STORE='sr3';
+let recs=JSON.parse(localStorage.getItem(STORE)||'[]');
+let scanning=false, stream=null, reader=null;
+const msg=document.getElementById('msg'), rec=document.getElementById('rec'), v=document.getElementById('v');
 
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-
-function save(){
-  localStorage.setItem(STORE_KEY, JSON.stringify(records));
-  localStorage.setItem('scan_next_idx', String(nextIdx));
-}
+function save(){localStorage.setItem(STORE,JSON.stringify(recs))}
 function render(){
-  recordsDiv.innerHTML = `<b>累计记录 (${records.length})</b>` + records.map(r=>
-    `<div class="item">[${r.idx}] ${esc(r.time)}<br><b>${esc(r.content)}</b> <small>(${esc(r.type)})</small>
-     <button onclick="this.parentElement.remove();records.splice(${records.indexOf(r)},1);save();render()" style="width:auto;padding:2px 8px;margin-left:8px;font-size:12px;background:#999">删</button></div>`
+  rec.innerHTML=`<b>记录 (${recs.length})</b>`+recs.map((r,i)=>
+    `<div class="it">[${r.idx}] ${r.time}<br><b>${r.content}</b> <button onclick="recs.splice(${i},1);save();render()" style="float:right;border:none;background:#eee;padding:2px 6px;border-radius:4px;font-size:11px">删</button></div>`
   ).join('');
 }
 render();
 
-function stopScan(){
-  if(scanning){try{Quagga.stop();}catch(e){} scanning=false;}
-  btnScan.textContent='▶ 开始扫描';
+document.getElementById('go').onclick=async()=>{
+  if(scanning){stop();return;}
+  if(!zxReady){msg.textContent='引擎还在加载，稍等...';return;}
+
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
+    v.srcObject=stream;
+    await v.play();
+    scanning=true;
+    document.getElementById('go').textContent='⏹ 停止';
+
+    const hints=new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.EAN_13]);
+
+    reader=new ZXing.BrowserMultiFormatReader(hints);
+    msg.textContent='扫描中...';
+
+    reader.decodeFromVideoDevice(null, v, (result, err)=>{
+      if(result){
+        const code=result.getText().trim();
+        // 只接受11位纯数字
+        if(/^\d{11}$/.test(code)){
+          const fmt=result.getBarcodeFormat?result.getBarcodeFormat():'Code128';
+          recs.push({idx:recs.length?Math.max(...recs.map(r=>r.idx))+1:1,time:new Date().toLocaleString(),content:code,type:fmt});
+          save(); render();
+          msg.innerHTML=`<span class="ok">✅ ${code}</span>`;
+          if(navigator.vibrate) navigator.vibrate([100]);
+          stop();
+        }
+      }
+    });
+  }catch(e){
+    msg.innerHTML=`<span style="color:red">失败：${e.message}</span>`;
+  }
+};
+
+function stop(){
+  scanning=false;
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  if(reader) reader.reset();
+  v.srcObject=null;
+  document.getElementById('go').textContent='▶ 开始扫描';
+  msg.textContent='已停止';
 }
 
-btnScan.onclick=()=>{
-  if(scanning){stopScan(); msg.textContent='已手动停止'; return;}
-
-  msg.textContent='启动相机...';
-  btnScan.textContent='⏹ 停止扫描';
-
-  Quagga.init({
-    inputStream:{
-      type:'LiveStream',
-      target:document.querySelector('#interactive'),
-      constraints:{facingMode:'environment', width:{ideal:1280}, height:{ideal:960}},
-      area:{top:'30%', right:'10%', left:'10%', bottom:'30%'}
-    },
-    locator:{patchSize:'large', halfSample:false},
-    numOfWorkers:2,
-    frequency:10,
-    decoder:{
-      readers:['code_128_reader'],
-      multiple:false,
-      debug:{drawBoundingBox:false}
-    }
-  }, err=>{
-    if(err){msg.innerHTML='<span style="color:red">启动失败：'+esc(err)+'</span>'; btnScan.textContent='▶ 开始扫描'; return;}
-    Quagga.start();
-    scanning=true;
-    msg.textContent='扫描中...请把条码对准绿色框';
-  });
+document.getElementById('exp').onclick=()=>{
+  // 动态加载 xlsx
+  if(!window.XLSX){
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload=doExport;
+    document.head.appendChild(s);
+  }else doExport();
+  function doExport(){
+    const ws=XLSX.utils.aoa_to_sheet([['序号','时间','内容','类型'],...recs.map(r=>[r.idx,r.time,r.content,r.type])]);
+    ws['!cols']=[{wch:6},{wch:20},{wch:16},{wch:12}];
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,ws,'记录');
+    XLSX.writeFile(wb,`扫码_${recs.length}条_${new Date().toISOString().slice(0,10)}.xlsx`);
+    msg.textContent='已导出';
+  }
 };
 
-Quagga.onDetected(result=>{
-  if(!scanning) return;
-  const code = (result.codeResult.code||'').trim();
-  const format = result.codeResult.format||'Code128';
-  const confidence = result.codeResult.confidence||0;
-
-  // 精确条件：必须是11位纯数字（你的标签条码）
-  if(!/^\d{11}$/.test(code)) return;
-  if(confidence < 0.85) return;
-
-  records.push({idx:nextIdx++, time:new Date().toLocaleString(), content:code, type:format});
-  save(); render();
-  msg.innerHTML='<span class="success">✅ 已扫：'+esc(code)+'</span>';
-  if(navigator.vibrate) navigator.vibrate([80,40,80]);
-  stopScan();
-});
-
-document.getElementById('btnExport').onclick=()=>{
-  const wsData=[['序号','扫描时间','扫描内容','码类型']];
-  records.forEach(r=>wsData.push([r.idx,r.time,r.content,r.type]));
-  const ws=XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols']=[{wch:6},{wch:20},{wch:18},{wch:12}];
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'扫码记录');
-  XLSX.writeFile(wb,`扫码记录_${records.length}条_${new Date().toISOString().slice(0,10)}.xlsx`);
-  msg.textContent=records.length?'已导出':'无记录';
-};
-
-document.getElementById('btnClear').onclick=()=>{
-  if(!records.length) return;
-  if(!confirm('确定清空所有记录？此操作不可恢复（可先导出Excel备份）')) return;
-  records=[]; nextIdx=1; save(); render(); msg.textContent='已清空';
+document.getElementById('clr').onclick=()=>{
+  if(recs.length&&confirm('清空？')){recs=[];save();render();msg.textContent='已清空'}
 };
 </script>
 </body>
