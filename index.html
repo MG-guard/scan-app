@@ -9,47 +9,58 @@
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f0f2f5;margin:0;padding:10px;color:#222}
 .box{max-width:500px;margin:auto;background:#fff;border-radius:14px;padding:14px;box-shadow:0 6px 20px rgba(0,0,0,.1)}
 h2{margin:0 0 4px;text-align:center;font-size:18px}
-.tip{text-align:center;color:#666;font-size:12px;margin-bottom:8px}
+.tip{text-align:center;color:#666;font-size:12px;margin-bottom:8px;line-height:1.5}
 #cam{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:12px;overflow:hidden;margin-bottom:8px}
-#cam video{width:100%;height:100%;object-fit:cover}
-#cam canvas{position:absolute;top:0;left:0;width:100%;height:100%}
-.cross{position:absolute;top:50%;left:10%;right:10%;height:2px;background:red;z-index:10;transform:translateY(-50%)}
-.cross::before,.cross::after{content:'';position:absolute;background:red}
-.cross::before{top:-20px;bottom:-20px;left:50%;width:2px;transform:translateX(-50%)}
+#cam video{width:100%;height:100%;object-fit:cover;display:block}
+#cam canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+.cross{position:absolute;top:50%;left:15%;right:15%;height:2px;background:rgba(255,0,0,.9);z-index:10;transform:translateY(-50%)}
+.corners{position:absolute;top:15%;left:10%;right:10%;bottom:15%;border:2px solid rgba(0,230,118,.7);border-radius:8px;pointer-events:none;z-index:9}
 .btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:16px;margin:6px 0;color:#fff;cursor:pointer}
 .b1{background:#1976d2}
 .b2{background:#2e7d32}
 .b3{background:#c62828}
-#msg{padding:8px;font-size:14px;border-radius:8px;background:#f5f5f5;margin:8px 0;min-height:20px}
+#msg{padding:8px;font-size:14px;border-radius:8px;background:#f5f5f5;margin:8px 0;min-height:44px;word-break:break-all}
 .ok{color:#2e7d32;font-weight:bold}
+.err{color:#c62828}
+.warn{color:#e65100}
 .rec{background:#fff;padding:10px;margin-top:10px;border-radius:10px;max-height:200px;overflow-y:auto;font-size:13px}
-.it{border-bottom:1px solid #eee;padding:6px 0}
+.it{border-bottom:1px solid #eee;padding:6px 0;word-break:break-all}
 </style>
 </head>
 <body>
 <div class="box">
 <h2>条码扫码</h2>
-<div class="tip">条码横向对准红线，扫到自动停</div>
-<div id="cam"><video id="v" playsinline></video><div class="cross"></div></div>
+<div class="tip">条码横向对准红线<br>画面模糊时手动点一下画面重新对焦</div>
+<div id="cam">
+  <video id="v" playsinline autoplay muted></video>
+  <div class="corners"></div>
+  <div class="cross"></div>
+</div>
 <button class="btn b1" id="go">▶ 开始扫描</button>
 <button class="btn b2" id="exp">📊 导出 Excel</button>
 <button class="btn b3" id="clr">🗑 清空</button>
-<div id="msg">点击开始扫描</div>
+<div id="msg">点击"开始扫描"启动相机</div>
 <div class="rec" id="rec"><b>记录 (0)</b></div>
 </div>
 
 <script>
-// 加载 ZXing WASM
-let zxReady=false;
-const script=document.createElement('script');
-script.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js';
-script.onload=()=>{zxReady=true;document.getElementById('msg').textContent='引擎加载完成，可开始扫描'};
-document.head.appendChild(script);
+// ====== 加载 ZXing ======
+let zxReady=false, ZXingLib=null;
+const msg=document.getElementById('msg'), rec=document.getElementById('rec'), v=document.getElementById('v');
 
-const STORE='sr3';
+function log(t,c){msg.innerHTML=c?`<span class="${c}">${t}</span>`:t}
+
+log('加载扫码引擎...','warn');
+const sc=document.createElement('script');
+sc.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js';
+sc.onload=()=>{zxReady=true; ZXingLib=ZXing; log('✅ 引擎就绪，可开始扫描','ok')};
+sc.onerror=()=>log('❌ 引擎加载失败，检查网络','err');
+document.head.appendChild(sc);
+
+// ====== 记录 ======
+const STORE='sr4';
 let recs=JSON.parse(localStorage.getItem(STORE)||'[]');
 let scanning=false, stream=null, reader=null;
-const msg=document.getElementById('msg'), rec=document.getElementById('rec'), v=document.getElementById('v');
 
 function save(){localStorage.setItem(STORE,JSON.stringify(recs))}
 function render(){
@@ -59,72 +70,110 @@ function render(){
 }
 render();
 
+// 点画面重新对焦
+v.addEventListener('click',()=>{
+  if(stream){stream.getTracks().forEach(t=>{if(t.getSettings().focusMode) t.applyConstraints({advanced:[{focusMode:'continuous'}]})})}
+});
+
 document.getElementById('go').onclick=async()=>{
   if(scanning){stop();return;}
-  if(!zxReady){msg.textContent='引擎还在加载，稍等...';return;}
+  if(!zxReady){log('引擎还没加载完，等一下','warn');return;}
 
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
+    log('启动相机...');
+    // 强制最高清
+    const constraints={
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{min:1280,ideal:1920,max:3840},
+        height:{min:720,ideal:1080,max:2160},
+        focusMode:'continuous',
+        exposureMode:'continuous'
+      },
+      audio:false
+    };
+    stream=await navigator.mediaDevices.getUserMedia(constraints);
     v.srcObject=stream;
-    await v.play();
+
+    // 等待视频真正播放
+    await new Promise((resolve,reject)=>{
+      v.onloadedmetadata=()=>{v.play().then(resolve).catch(reject)};
+      setTimeout(()=>reject(new Error('视频加载超时')),5000);
+    });
+
     scanning=true;
     document.getElementById('go').textContent='⏹ 停止';
+    log('扫描中...对准条码');
 
+    // ZXing 配置
     const hints=new Map();
-    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.EAN_13]);
+    hints.set(ZXingLib.DecodeHintType.TRY_HARDER,true);
+    hints.set(ZXingLib.DecodeHintType.ALSO_INVERTED,true);
+    hints.set(ZXingLib.DecodeHintType.POSSIBLE_FORMATS,[
+      ZXingLib.BarcodeFormat.CODE_128,
+      ZXingLib.BarcodeFormat.EAN_13,
+      ZXingLib.BarcodeFormat.CODE_39,
+      ZXingLib.BarcodeFormat.UPC_A
+    ]);
 
-    reader=new ZXing.BrowserMultiFormatReader(hints);
-    msg.textContent='扫描中...';
+    reader=new ZXingLib.BrowserMultiFormatReader(hints);
 
     reader.decodeFromVideoDevice(null, v, (result, err)=>{
       if(result){
         const code=result.getText().trim();
-        // 只接受11位纯数字
-        if(/^\d{11}$/.test(code)){
-          const fmt=result.getBarcodeFormat?result.getBarcodeFormat():'Code128';
-          recs.push({idx:recs.length?Math.max(...recs.map(r=>r.idx))+1:1,time:new Date().toLocaleString(),content:code,type:fmt});
+        // 接受 10~12 位数字
+        if(/^\d{10,12}$/.test(code)){
+          recs.push({
+            idx:recs.length?Math.max(...recs.map(r=>r.idx))+1:1,
+            time:new Date().toLocaleString(),
+            content:code,
+            type:result.getBarcodeFormat?result.getBarcodeFormat():'Code128'
+          });
           save(); render();
-          msg.innerHTML=`<span class="ok">✅ ${code}</span>`;
-          if(navigator.vibrate) navigator.vibrate([100]);
+          log(`✅ 已扫：${code}`,'ok');
+          if(navigator.vibrate) navigator.vibrate([100,50,100]);
           stop();
         }
       }
     });
+
   }catch(e){
-    msg.innerHTML=`<span style="color:red">失败：${e.message}</span>`;
+    log(`❌ ${e.message||e}`,'err');
+    scanning=false;
+    document.getElementById('go').textContent='▶ 开始扫描';
   }
 };
 
 function stop(){
   scanning=false;
-  if(stream) stream.getTracks().forEach(t=>t.stop());
-  if(reader) reader.reset();
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  if(reader){reader.reset();reader=null}
   v.srcObject=null;
   document.getElementById('go').textContent='▶ 开始扫描';
-  msg.textContent='已停止';
+  log('已停止');
 }
 
+// 导出
 document.getElementById('exp').onclick=()=>{
-  // 动态加载 xlsx
+  if(!recs.length){log('没有记录');return;}
   if(!window.XLSX){
     const s=document.createElement('script');
     s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-    s.onload=doExport;
+    s.onload=doExp;
     document.head.appendChild(s);
-  }else doExport();
-  function doExport(){
+  }else doExp();
+  function doExp(){
     const ws=XLSX.utils.aoa_to_sheet([['序号','时间','内容','类型'],...recs.map(r=>[r.idx,r.time,r.content,r.type])]);
     ws['!cols']=[{wch:6},{wch:20},{wch:16},{wch:12}];
     const wb=XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb,ws,'记录');
     XLSX.writeFile(wb,`扫码_${recs.length}条_${new Date().toISOString().slice(0,10)}.xlsx`);
-    msg.textContent='已导出';
+    log('已导出 Excel','ok');
   }
 };
 
 document.getElementById('clr').onclick=()=>{
-  if(recs.length&&confirm('清空？')){recs=[];save();render();msg.textContent='已清空'}
+  if(recs.length&&confirm('清空所有记录？')){recs=[];save();render();log('已清空')}
 };
 </script>
 </body>
